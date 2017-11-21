@@ -2,7 +2,6 @@ package com.example.zhangjing.xmodule;
 
 import android.app.AndroidAppHelper;
 import android.content.Intent;
-import android.content.pm.ApplicationInfo;
 import android.util.Log;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
@@ -19,14 +18,14 @@ import java.io.OutputStreamWriter;
  */
 public class XModule implements IXposedHookLoadPackage {
     public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
-
-        if(lpparam.appInfo == null ||
-                (lpparam.appInfo.flags & (ApplicationInfo.FLAG_SYSTEM | ApplicationInfo.FLAG_UPDATED_SYSTEM_APP)) !=0) {
-            return;
-        }else {
+        //剔除系统应用
+//        if(lpparam.appInfo == null ||
+//                (lpparam.appInfo.flags & (ApplicationInfo.FLAG_SYSTEM | ApplicationInfo.FLAG_UPDATED_SYSTEM_APP)) !=0) {
+//            return;
+//        }else {
             XposedBridge.log("Loaded app: " + lpparam.packageName);
             hookActivityManager(lpparam);
-        }
+//        }
     }
 
     public void hookActivityManager(final XC_LoadPackage.LoadPackageParam lpparam) {
@@ -70,7 +69,7 @@ public class XModule implements IXposedHookLoadPackage {
                     sb.append(",");
                     StackTraceElement[] elements = Thread.currentThread().getStackTrace();
                     for (StackTraceElement ele : elements) {
-                        sb.append(ele.getMethodName() + "|");
+                        sb.append(ele.getFileName()+"."+ele.getClassName()+"."+ele.getMethodName() + "|");
                     }
 
 //                    BufferedWriter out = null;
@@ -103,7 +102,7 @@ public class XModule implements IXposedHookLoadPackage {
                     sb.append(param.args[4] + ",");
                     StackTraceElement[] elements = Thread.currentThread().getStackTrace();
                     for (StackTraceElement ele : elements) {
-                        sb.append(ele.getMethodName() + "|");
+                        sb.append(ele.getFileName()+"."+ele.getClassName()+"."+ele.getMethodName() + "|");
                     }
                     BufferedWriter out = null;
                     try {
