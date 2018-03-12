@@ -1,10 +1,10 @@
 package com.example.zhangjing.xmodule;
 
 import android.app.Activity;
-import android.content.BroadcastReceiver;
-import android.content.Intent;
-import android.content.IntentFilter;
+import android.app.AlertDialog;
+import android.content.*;
 import android.content.pm.ApplicationInfo;
+import android.net.Uri;
 import android.os.Environment;
 import android.util.Log;
 import de.robv.android.xposed.IXposedHookLoadPackage;
@@ -13,11 +13,9 @@ import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.OutputStreamWriter;
-import java.io.Writer;
+import java.io.*;
 import java.lang.reflect.InvocationTargetException;
+import java.util.HashMap;
 
 /**
  * Created by ZhangJing on 2017/11/20.
@@ -25,25 +23,49 @@ import java.lang.reflect.InvocationTargetException;
  * exit point 部分
  */
 public class XModule implements IXposedHookLoadPackage {
-    String fileName = null;
+    String packageName = null;
     StringBuilder stringBuilder = null;
+    public static int writeFileTimes = 0;
+    public static int readFileTimes = 0;
+    public static Context context = null;
+
     public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
         //剔除系统应用
         if(lpparam.appInfo == null ||
                 (lpparam.appInfo.flags & (ApplicationInfo.FLAG_SYSTEM | ApplicationInfo.FLAG_UPDATED_SYSTEM_APP)) !=0
-                || lpparam.packageName.contains("xiaomi")) {
+                || lpparam.packageName.contains("xiaomi") || lpparam.packageName.contains("xposed")) {
             return;
         }else {
             XposedBridge.log("Loaded app: " + lpparam.packageName);
 //            Date d = new Date();
 //            SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMddHHmmss");
 //            String dateNowStr = sdf.format(d);
-            fileName = lpparam.packageName;
+            packageName = lpparam.packageName;
             hookActivityManager(lpparam);
         }
     }
 
     public void hookActivityManager(final XC_LoadPackage.LoadPackageParam lpparam) throws NoSuchMethodException, IllegalAccessException, InvocationTargetException, InstantiationException {
+
+        //得到context
+        /*final Class<?> clazz = XposedHelpers.findClass("android.app.Instrumentation", null);
+        XposedHelpers.findAndHookMethod(clazz, "callApplicationOnCreate", Application.class, new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                super.beforeHookedMethod(param);
+            }
+
+            @Override
+            protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                super.afterHookedMethod(param);
+                if(param.args[0] instanceof Application){
+                    context = ((Application) param.args[0]).getApplicationContext();
+                } else {
+                    return;
+                }
+            }
+        });*/
+
 
         //Activity 中的启动activity sink点(其他的方式实际都在ContextWrapper中)
         Class<?> cls = XposedHelpers.findClass("android.app.Activity", lpparam.classLoader);
@@ -72,7 +94,7 @@ public class XModule implements IXposedHookLoadPackage {
                         stringBuilder.append("filename="+ele.getFileName() + ";" + "classname="+ele.getClassName() + ";" + "methodname="+ele.getMethodName() + "|");
                     }
                     stringBuilder.append("\n");
-                    XposedBridge.log(fileName + "$" + stringBuilder.toString());
+                    XposedBridge.log(packageName + "$" + stringBuilder.toString());
                     super.beforeHookedMethod(param);
                 }
             });
@@ -80,7 +102,7 @@ public class XModule implements IXposedHookLoadPackage {
 
         //BroadcastReceiver中的sink点
         cls = XposedHelpers.findClass("android.content.BroadcastReceiver", lpparam.classLoader);
-        String[] broadcastReceiverMethods = {"setResult", "setResultData"};
+        final String[] broadcastReceiverMethods = {"setResult", "setResultData"};
 
         for (final String method : broadcastReceiverMethods) {
             XposedBridge.hookAllMethods(cls, method, new XC_MethodHook() {
@@ -104,19 +126,41 @@ public class XModule implements IXposedHookLoadPackage {
                         stringBuilder.append("filename="+ele.getFileName() + ";" + "classname="+ele.getClassName() + ";" + "methodname="+ele.getMethodName() + "|");
                     }
                     stringBuilder.append("\n");
-                    XposedBridge.log(fileName + "$" + stringBuilder.toString());
+                    XposedBridge.log(packageName + "$" + stringBuilder.toString());
                     super.beforeHookedMethod(param);
                 }
             });
         }
 
+        //响应startActivity
+        cls = XposedHelpers.findClass("android.app.Instrumentation", lpparam.classLoader);
+        XposedBridge.hookAllMethods(cls, "callActivityOnCreate", new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                StringBuilder stringBuilder = new StringBuilder();
+                stringBuilder.append("Instrumentation -> callActivityOnCreate,");
+
+                Activity r = (Activity)param.args[0];
+                if (r != null) {
+                    stringBuilder.append(r.toString()+";"+r.getIntent().toUri(0));
+                    context = r;
+                }
+                StackTraceElement[] elements = Thread.currentThread().getStackTrace();
+                for (StackTraceElement ele : elements) {
+                    stringBuilder.append("|filename="+ele.getFileName() + ";" + "classname="+ele.getClassName() + ";" + "methodname="+ele.getMethodName() + "|");
+                }
+                stringBuilder.append("\n");
+                XposedBridge.log(packageName + "$" + stringBuilder.toString());
+                super.afterHookedMethod(param);
+            }
+        });
 
         cls = XposedHelpers.findClass("android.content.ContextWrapper", lpparam.classLoader);
         String[] contentWrappermethods = {"sendBroadcast", "startActivity", "startActivityAsUser",
                 "startActivities", "sendBroadcast", "sendBroadcastMultiplePermissions",
                 "sendOrderedBroadcast", "sendBroadcastAsUser", "sendOrderedBroadcastAsUser",
                 "sendStickyBroadcast", "sendStickyOrderedBroadcastAsUser", "startService",
-                "startServiceAsUser", "registerReceiver", "openFileOutput", "bindService"};
+                "startServiceAsUser", "registerReceiver", "openFileOutput", "bindService","openFileInput"};
 
         for (final String method : contentWrappermethods) {
             XposedBridge.hookAllMethods(cls, method, new XC_MethodHook() {
@@ -163,13 +207,20 @@ public class XModule implements IXposedHookLoadPackage {
                             sb.append(",");
                         }
                     }
+                    if (method.equals("openFileInput")){
+                        if (param.args != null && param.args.length > 1) {
+                            sb.append("@@filename=" + param.args[0].toString() + "@@");
+                            sb.append(",");
+                        }
+                    }
+
                     sb.append("|");
                     StackTraceElement[] elements = Thread.currentThread().getStackTrace();
                     for (StackTraceElement ele : elements) {
                         sb.append("filename="+ele.getFileName() + ";" + "classname="+ele.getClassName() + ";" + "methodname="+ele.getMethodName() + "|");
                     }
                     sb.append("\n");
-                    XposedBridge.log(fileName + "$" + sb.toString());
+                    XposedBridge.log(packageName + "$" + sb.toString());
                     super.beforeHookedMethod(param);
                 }
             });
@@ -188,6 +239,7 @@ public class XModule implements IXposedHookLoadPackage {
                             br = (BroadcastReceiver) o;
                     }
                 }
+
                 //StringBuilder sb = new StringBuilder();
                 stringBuilder.append("ReceiverDispatcher -> ");
                 stringBuilder.append("staticBroadcast," + br.getClass().toString() + ";");
@@ -209,7 +261,7 @@ public class XModule implements IXposedHookLoadPackage {
 //                        sb.append(stringBuilder.toString() + "Args -> staticBroadcast,");
                         sb.append(stringBuilder.toString() + br.toUri(0) + ";hashcode="+System.identityHashCode(br));
                         sb.append("\n");
-                        XposedBridge.log(fileName + "$" + sb.toString());
+                        XposedBridge.log(packageName + "$" + sb.toString());
                         super.beforeHookedMethod(param);
                     }
 
@@ -219,7 +271,7 @@ public class XModule implements IXposedHookLoadPackage {
 
         //Intent中的source点
         cls = XposedHelpers.findClass("android.content.Intent", lpparam.classLoader);
-        String[] intentMethods = {"getData", "getExtras", };
+        final String[] intentMethods = {"getData", "getExtras", };
 
         for (final String method : intentMethods) {
             XposedBridge.hookAllMethods(cls, method, new XC_MethodHook() {
@@ -236,92 +288,174 @@ public class XModule implements IXposedHookLoadPackage {
                         stringBuilder.append("|filename="+ele.getFileName() + ";" + "classname="+ele.getClassName() + ";" + "methodname="+ele.getMethodName() + "|");
                     }
                     stringBuilder.append("\n");
-                    XposedBridge.log(fileName + "$" + stringBuilder.toString());
+                    XposedBridge.log(packageName + "$" + stringBuilder.toString());
                     super.afterHookedMethod(param);
                 }
             });
         }
 
-        //读写文件
+        //写文件
         cls = XposedHelpers.findClass("java.io.FileOutputStream", lpparam.classLoader);
         XposedBridge.hookAllConstructors(cls, new XC_MethodHook() {
             @Override
             protected void beforeHookedMethod(XC_MethodHook.MethodHookParam param) throws Throwable {
+                if (writeFileTimes > 1){
+                    writeFileTimes = 0;
+                    return;
+                }
                 String filepath = "null";
                 if (param.args != null){
                     if (param.args[0] instanceof File){
                         File f = (File)param.args[0];
                         filepath = f.getAbsolutePath();
-                    }else if (param.args[0] instanceof String){
-                        filepath = (String) param.args[0];
+                        if (filepath.contains("ilc.txt")){
+                            return;
+                        }
                     }else{
                         return;
                     }
                 }
                 StringBuilder stringBuilder = new StringBuilder();
-                stringBuilder.append(fileName + "$FileOutputStream -> " + filepath +"|");
+                stringBuilder.append(packageName + "$FileOutputStream -> " + filepath +"|");
                 StackTraceElement[] elements = Thread.currentThread().getStackTrace();
                 for (StackTraceElement ele : elements) {
                     stringBuilder.append("filename="+ele.getFileName() + ";" + "classname="+ele.getClassName() + ";" + "methodname="+ele.getMethodName() + "|");
                 }
                 stringBuilder.append("\n");
                 XposedBridge.log(stringBuilder.toString());
+                writeFileTimes++;
+                saveCore(packageName, "file"+filepath);
                 super.beforeHookedMethod(param);
             }
         });
 
-        //响应startActivity
-        cls = XposedHelpers.findClass("android.app.Instrumentation", lpparam.classLoader);
-        XposedBridge.hookAllMethods(cls, "callActivityOnCreate", new XC_MethodHook() {
+        //读文件
+        cls = XposedHelpers.findClass("java.io.FileInputStream", lpparam.classLoader);
+        XposedBridge.hookAllConstructors(cls, new XC_MethodHook() {
             @Override
-            protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                StringBuilder stringBuilder = new StringBuilder();
-                stringBuilder.append("Instrumentation -> callActivityOnCreate,");
-
-                Activity r = (Activity)param.args[0];
-                if (r != null) {
-                    stringBuilder.append(r.toString()+";"+r.getIntent().toUri(0));
+            protected void beforeHookedMethod(final XC_MethodHook.MethodHookParam param) throws Throwable {
+                if (readFileTimes > 1){
+                    readFileTimes = 0;
+                    return;
                 }
-                StackTraceElement[] elements = Thread.currentThread().getStackTrace();
-                for (StackTraceElement ele : elements) {
-                    stringBuilder.append("|filename="+ele.getFileName() + ";" + "classname="+ele.getClassName() + ";" + "methodname="+ele.getMethodName() + "|");
+                String filepath = "null";
+                if (param.args != null){
+                    if (param.args[0] instanceof File){
+                        File f = (File)param.args[0];
+                        filepath = f.getAbsolutePath();
+                        if (filepath.contains("ilc.txt")){
+                            return;
+                        }
+                    }else {
+                        return;
+                    }
                 }
-                stringBuilder.append("\n");
-                XposedBridge.log(fileName + "$" + stringBuilder.toString());
-                super.afterHookedMethod(param);
+                HashMap<String, String> v = getCore();
+                if (v.get("file"+filepath)!=null && !v.get("file"+filepath).equals(packageName)){
+                    final String f = filepath;
+                    AlertDialog.Builder normalDialog = new AlertDialog.Builder(context);
+                    normalDialog.setTitle("警告");
+                    normalDialog.setMessage(packageName+"正试图访问"+v.get("file"+filepath)+"的文件:\n"+filepath+"\n"+"要阻止访问吗？");
+                    normalDialog.setPositiveButton("是",
+                            new DialogInterface.OnClickListener() {
+                                @Override
+                                public void onClick(DialogInterface dialog, int which) {
+                                    //...To-do
+                                    param.setResult(null);
+                                }
+                            });
+                    normalDialog.setNegativeButton("否",
+                            new DialogInterface.OnClickListener() {
+                                @Override
+                                public void onClick(DialogInterface dialog, int which) {
+                                    //...To-do
+                                    StringBuilder stringBuilder = new StringBuilder();
+                                    stringBuilder.append(packageName + "$FileInputStream -> " + f +"|");
+                                    StackTraceElement[] elements = Thread.currentThread().getStackTrace();
+                                    for (StackTraceElement ele : elements) {
+                                        stringBuilder.append("filename="+ele.getFileName() + ";" + "classname="+ele.getClassName() + ";" + "methodname="+ele.getMethodName() + "|");
+                                    }
+                                    stringBuilder.append("\n");
+                                    XposedBridge.log(stringBuilder.toString());
+                                    readFileTimes++;
+                                }
+                            });
+                    // 显示
+                    normalDialog.show();
+                }
             }
         });
 
-//        //test
-//        cls = XposedHelpers.findClass("com.example.zhangjing.recdevicetest.MainActivity", lpparam.classLoader);
-//        XposedBridge.hookAllMethods(cls, "onCreate", new XC_MethodHook() {
-//            @Override
-//            protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-//                StringBuilder stringBuilder = new StringBuilder();
-//                stringBuilder.append("Activity -> onCreate,");
-//
-//                StackTraceElement[] elements = Thread.currentThread().getStackTrace();
-//                for (StackTraceElement ele : elements) {
-//                    stringBuilder.append("filename="+ele.getFileName() + ";" + "classname="+ele.getClassName() + ";" + "methodname="+ele.getMethodName() + "|");
-//                }
-//                stringBuilder.append("\n");
-//                XposedBridge.log(fileName + "$" + stringBuilder.toString());
-//                super.beforeHookedMethod(param);
-//            }
-//        });
+        //test ContentProvider
+        cls = XposedHelpers.findClass("android.content.ContentProvider", lpparam.classLoader);
+        String[] contentProviderMethods = {"insert", "bulkInsert", "update",
+                    "query", "openFile"};
+        for (final String method : contentProviderMethods) {
+            XposedBridge.hookAllMethods(cls, "onCreate", new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                    StringBuilder stringBuilder = new StringBuilder();
+                    stringBuilder.append("ContentProvider -> " + method + ",");
+                    for (Object ar : param.args){
+                        if (ar instanceof Uri){
+                            stringBuilder.append(((Uri)ar).toString());
+                            break;
+                        }
+                    }
+
+                    StackTraceElement[] elements = Thread.currentThread().getStackTrace();
+                    for (StackTraceElement ele : elements) {
+                        stringBuilder.append("|filename=" + ele.getFileName() + ";" + "classname=" + ele.getClassName() + ";" + "methodname=" + ele.getMethodName() + "|");
+                    }
+                    stringBuilder.append("\n");
+                    XposedBridge.log(packageName + "$" + stringBuilder.toString());
+                    super.beforeHookedMethod(param);
+                }
+            });
+        }
 
     }
 
+    //将通信的联系点存入文件。因为对每个app的hook都是单独的进程
+    public void saveCore(String appName, String core){
+        try {
+            FileOutputStream fos = new FileOutputStream(Environment.getExternalStorageDirectory().getPath()+ "/ilc.txt", true);
+            Writer out = new OutputStreamWriter(fos, "UTF-8");
+            out.write(core+"," + appName + "\n");
+            out.close();
+            fos.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    public HashMap<String, String> getCore(){
+        String line="";
+        HashMap<String, String> result = new HashMap();
+        try {
+            FileInputStream fos = new FileInputStream(Environment.getExternalStorageDirectory().getPath()+ "/ilc.txt");
+            BufferedReader out = new BufferedReader(new InputStreamReader(fos, "UTF-8"));
+            while ((line=out.readLine())!=null) {
+                result.put(line.split(",")[0], line.split(",")[1]);
+            }
+            out.close();
+            fos.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return result;
+    }
 
 
     public void saveLog(StringBuilder sb){
         try {
-            Log.i("xposed@@",fileName +".txt $$$$$");
-            FileOutputStream fos = new FileOutputStream(Environment.getExternalStorageDirectory().getPath()+ "/"+fileName +".txt", true);
+            Log.i("xposed@@",packageName +".log $$$$$");
+            FileOutputStream fos = new FileOutputStream(Environment.getExternalStorageDirectory().getPath()+ "/"+packageName +".log", true);
             Writer out = new OutputStreamWriter(fos, "UTF-8");
             out.write(sb.toString());
             out.close();
-            Log.i("xposed@@",fileName +".txt $$$$$");
+            fos.close();
+            Log.i("xposed@@",packageName +".log $$$$$");
         } catch (Exception e) {
             e.printStackTrace();
         }
