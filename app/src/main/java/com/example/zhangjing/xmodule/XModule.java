@@ -6,7 +6,12 @@ import android.content.*;
 import android.content.pm.ApplicationInfo;
 import android.net.Uri;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.Message;
 import android.util.Log;
+import android.view.WindowManager;
+import android.widget.Toast;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
@@ -16,6 +21,7 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 import java.io.*;
 import java.lang.reflect.InvocationTargetException;
 import java.util.HashMap;
+import java.util.Map;
 
 /**
  * Created by ZhangJing on 2017/11/20.
@@ -47,26 +53,6 @@ public class XModule implements IXposedHookLoadPackage {
 
     public void hookActivityManager(final XC_LoadPackage.LoadPackageParam lpparam) throws NoSuchMethodException, IllegalAccessException, InvocationTargetException, InstantiationException {
 
-        //得到context
-        /*final Class<?> clazz = XposedHelpers.findClass("android.app.Instrumentation", null);
-        XposedHelpers.findAndHookMethod(clazz, "callApplicationOnCreate", Application.class, new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                super.beforeHookedMethod(param);
-            }
-
-            @Override
-            protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                super.afterHookedMethod(param);
-                if(param.args[0] instanceof Application){
-                    context = ((Application) param.args[0]).getApplicationContext();
-                } else {
-                    return;
-                }
-            }
-        });*/
-
-
         //Activity 中的启动activity sink点(其他的方式实际都在ContextWrapper中)
         Class<?> cls = XposedHelpers.findClass("android.app.Activity", lpparam.classLoader);
         String[] activityMethods = {"startActivityForResult", "startActivityFromChild", "startActivityFromFragment",
@@ -95,7 +81,6 @@ public class XModule implements IXposedHookLoadPackage {
                     }
                     stringBuilder.append("\n");
                     XposedBridge.log(packageName + "$" + stringBuilder.toString());
-                    super.beforeHookedMethod(param);
                 }
             });
         }
@@ -127,7 +112,6 @@ public class XModule implements IXposedHookLoadPackage {
                     }
                     stringBuilder.append("\n");
                     XposedBridge.log(packageName + "$" + stringBuilder.toString());
-                    super.beforeHookedMethod(param);
                 }
             });
         }
@@ -151,7 +135,6 @@ public class XModule implements IXposedHookLoadPackage {
                 }
                 stringBuilder.append("\n");
                 XposedBridge.log(packageName + "$" + stringBuilder.toString());
-                super.afterHookedMethod(param);
             }
         });
 
@@ -177,13 +160,11 @@ public class XModule implements IXposedHookLoadPackage {
                     // Log action type
                     sb.append("ContextWrapper -> " + method + ",");
 
-                    // Log current package name
-                    //sb.append(AndroidAppHelper.currentPackageName() + ",");
-
                     // Log intent info
                     if (intent != null) {
                         sb.append(intent.toUri(0));
                         sb.append(",");
+                        saveCore(packageName, "intent" + intent.getAction());
                     }
 
                     // Log extra info
@@ -221,16 +202,15 @@ public class XModule implements IXposedHookLoadPackage {
                     }
                     sb.append("\n");
                     XposedBridge.log(packageName + "$" + sb.toString());
-                    super.beforeHookedMethod(param);
                 }
             });
         }
 
-        //静态注册的广播，唤醒hook
+        //接收广播，hook
         cls = XposedHelpers.findClass("android.app.LoadedApk$ReceiverDispatcher", lpparam.classLoader);
         XposedBridge.hookAllConstructors(cls, new XC_MethodHook() {
             @Override
-            protected void beforeHookedMethod(XC_MethodHook.MethodHookParam param) throws Throwable {
+            protected void beforeHookedMethod(final XC_MethodHook.MethodHookParam param) throws Throwable {
                 stringBuilder = new StringBuilder();
                 BroadcastReceiver br = null;
                 if (param.args != null) {
@@ -239,8 +219,6 @@ public class XModule implements IXposedHookLoadPackage {
                             br = (BroadcastReceiver) o;
                     }
                 }
-
-                //StringBuilder sb = new StringBuilder();
                 stringBuilder.append("ReceiverDispatcher -> ");
                 stringBuilder.append("staticBroadcast," + br.getClass().toString() + ";");
 //                XposedBridge.log(fileName + "$" + stringBuilder.toString());
@@ -249,20 +227,58 @@ public class XModule implements IXposedHookLoadPackage {
                 Class clazz = XposedHelpers.findClass("android.app.LoadedApk$ReceiverDispatcher$Args", lpparam.classLoader);
                 XposedBridge.hookAllConstructors(clazz, new XC_MethodHook() {
                     @Override
-                    protected void beforeHookedMethod(XC_MethodHook.MethodHookParam param) throws Throwable {
-                        Intent br = null;
+                    protected void beforeHookedMethod(final XC_MethodHook.MethodHookParam param) throws Throwable {
+                        Intent innent = null;
                         if (param.args != null) {
                             for (Object o : param.args) {
                                 if (o instanceof Intent)
-                                    br = (Intent) o;
+                                    innent = (Intent) o;
                             }
                         }
-                        StringBuilder sb = new StringBuilder();
-//                        sb.append(stringBuilder.toString() + "Args -> staticBroadcast,");
-                        sb.append(stringBuilder.toString() + br.toUri(0) + ";hashcode="+System.identityHashCode(br));
-                        sb.append("\n");
-                        XposedBridge.log(packageName + "$" + sb.toString());
-                        super.beforeHookedMethod(param);
+                        final Intent br = innent;
+                        new Thread(new Runnable() {
+                            @Override
+                            public void run() {
+                                Looper mLooper;
+                                Looper.prepare();
+                                mLooper = Looper.myLooper();
+                                final Handler handler = new Handler(mLooper) {
+                                    @Override
+                                    public void handleMessage(Message msg) {
+                                        Map<String, String> v = getCore();
+                                        Toast.makeText(context,packageName+"正试图接收来自"+v.get("Broadcast"+br.getAction())+"的广播", Toast.LENGTH_LONG);
+                                        if (v.get("Broadcast"+br.getAction())!=null && !v.get("Broadcast"+br.getAction()).equals(packageName)){
+                                            AlertDialog.Builder normalDialog = new AlertDialog.Builder(context);
+                                            AlertDialog dialog = normalDialog.setMessage(packageName+"正试图接收来自"+v.get("Broadcast"+br.getAction())+"的广播:\n"+"要阻止吗？")
+                                                    .setPositiveButton("是",
+                                                            new DialogInterface.OnClickListener() {
+                                                                @Override
+                                                                public void onClick(DialogInterface dialog, int which) {
+                                                                    //...To-do
+                                                                    param.setResult(null);
+                                                                }
+                                                            })
+                                                    .setNegativeButton("否",
+                                                            new DialogInterface.OnClickListener() {
+                                                                @Override
+                                                                public void onClick(DialogInterface dialog, int which) {
+                                                                    //...To-do
+                                                                    StringBuilder sb = new StringBuilder();
+                                                                    sb.append(stringBuilder.toString() + br.toUri(0) + ";hashcode="+System.identityHashCode(br));
+                                                                    sb.append("\n");
+                                                                    XposedBridge.log(packageName + "$" + sb.toString());
+                                                                }
+                                                            }).create();
+                                            dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_SYSTEM_ALERT);
+                                            dialog.setCanceledOnTouchOutside(false);//点击屏幕不消失
+                                            dialog.show();
+                                        }
+                                    }
+                                };
+                                handler.sendEmptyMessage(0);
+                                Looper.loop();
+                            }
+                        }).run();
                     }
 
                 });
@@ -276,20 +292,66 @@ public class XModule implements IXposedHookLoadPackage {
         for (final String method : intentMethods) {
             XposedBridge.hookAllMethods(cls, method, new XC_MethodHook() {
                 @Override
-                protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                protected void beforeHookedMethod(final MethodHookParam param) throws Throwable {
                     StringBuilder stringBuilder = new StringBuilder();
                     stringBuilder.append("Intent -> " + method + ",");
 
                     Intent result = (Intent)param.thisObject;
-                    stringBuilder.append(result.toUri(0) + ";hashcode="+System.identityHashCode(result)+",");
-
-                    StackTraceElement[] elements = Thread.currentThread().getStackTrace();
-                    for (StackTraceElement ele : elements) {
-                        stringBuilder.append("|filename="+ele.getFileName() + ";" + "classname="+ele.getClassName() + ";" + "methodname="+ele.getMethodName() + "|");
+                    HashMap<String, String> v = getCore();
+                    if (v.get("intent"+result.getAction())!=null && !v.get("intent"+result.getAction()).equals(packageName)) {
+                        AlertDialog.Builder normalDialog = new AlertDialog.Builder(context);
+                        AlertDialog dialog = normalDialog.setMessage(packageName+"正试图通过与"+v.get("intent"+result.getAction())+"通信的intent中获取信息，要阻止访问吗？")
+                                .setPositiveButton("是", new DialogInterface.OnClickListener() {
+                                    @Override
+                                    public void onClick(DialogInterface dialog, int which) {
+                                        //...To-do
+                                        param.setResult(null);
+                                    }
+                                })
+                                .setNegativeButton("否", new DialogInterface.OnClickListener() {
+                                    @Override
+                                    public void onClick(DialogInterface dialog, int which) {
+                                        //...To-do
+                                        param.setResult(null);
+                                    }
+                                }).create();
+                        dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_SYSTEM_ALERT);
+                        dialog.setCanceledOnTouchOutside(false);//点击屏幕不消失
+                        dialog.show();
                     }
-                    stringBuilder.append("\n");
-                    XposedBridge.log(packageName + "$" + stringBuilder.toString());
-                    super.afterHookedMethod(param);
+
+//                        normalDialog.setTitle("警告");
+//                        normalDialog.setMessage(packageName+"正试图通过与"+v.get("intent"+result.getAction())+"通信的intent中获取信息，要阻止访问吗？");
+//                        normalDialog.setPositiveButton("是",
+//                                new DialogInterface.OnClickListener() {
+//                                    @Override
+//                                    public void onClick(DialogInterface dialog, int which) {
+//                                        //...To-do
+//                                        param.setResult(null);
+//                                    }
+//                                });
+//                        normalDialog.setNegativeButton("否",
+//                                new DialogInterface.OnClickListener() {
+//                                    @Override
+//                                    public void onClick(DialogInterface dialog, int which) {
+//                                        //...To-do
+//                                    }
+//                                });
+//                        normalDialog.getWindow().setType(WindowManager.LayoutParams.TYPE_SYSTEM_ALERT);
+//                        normalDialog.setCanceledOnTouchOutside(false);//点击屏幕不消失
+//                        // 显示
+//                        normalDialog.show();
+//                    }
+
+//                    stringBuilder.append(result.toUri(0) + ";hashcode="+System.identityHashCode(result)+",");
+//
+//                    StackTraceElement[] elements = Thread.currentThread().getStackTrace();
+//                    for (StackTraceElement ele : elements) {
+//                        stringBuilder.append("|filename="+ele.getFileName() + ";" + "classname="+ele.getClassName() + ";" + "methodname="+ele.getMethodName() + "|");
+//                    }
+//                    stringBuilder.append("\n");
+//                    XposedBridge.log(packageName + "$" + stringBuilder.toString());
+//                    super.afterHookedMethod(param);
                 }
             });
         }
