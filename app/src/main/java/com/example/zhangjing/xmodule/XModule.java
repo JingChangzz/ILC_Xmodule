@@ -39,7 +39,8 @@ public class XModule implements IXposedHookLoadPackage {
         //剔除系统应用
         if(lpparam.appInfo == null ||
                 (lpparam.appInfo.flags & (ApplicationInfo.FLAG_SYSTEM | ApplicationInfo.FLAG_UPDATED_SYSTEM_APP)) !=0
-                || lpparam.packageName.contains("xiaomi") || lpparam.packageName.contains("xposed")) {
+                ||
+                lpparam.packageName.contains("xiaomi") || lpparam.packageName.contains("xposed")) {
             return;
         }else {
             XposedBridge.log("Loaded app: " + lpparam.packageName);
@@ -269,8 +270,9 @@ public class XModule implements IXposedHookLoadPackage {
                                                                     XposedBridge.log(packageName + "$" + sb.toString());
                                                                 }
                                                             }).create();
-                                            dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_SYSTEM_ALERT);
+                                            dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_TOAST);
                                             dialog.setCanceledOnTouchOutside(false);//点击屏幕不消失
+
                                             dialog.show();
                                         }
                                     }
@@ -475,8 +477,8 @@ public class XModule implements IXposedHookLoadPackage {
                 }
             });
         }
-
     }
+
 
     //将通信的联系点存入文件。因为对每个app的hook都是单独的进程
     public void saveCore(String appName, String core){
